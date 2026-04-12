@@ -1,0 +1,103 @@
+from langchain_milvus import Milvus
+from langchain_core.documents import Document
+import logging
+from typing import Any
+from pymilvus import MilvusClient
+from langchain_community.retrievers import BM25Retriever
+logger = logging.getLogger(__name__)
+class RetrievalOptimizationModule:
+    def __init__(self, vectorstore, chunks: list[Document]):
+        # 注意：建议直接传入 vectorstore 对象
+        self.vectorstore = vectorstore
+        self.chunks = chunks
+        self.setup_retrievers()
+    def _rrf_rerank(self, vector_docs: list[Document], bm25_docs: list[Document], k: int = 60) -> list[Document]:
+        """
+        使用RRF (Reciprocal Rank Fusion) 算法重排文档
+
+        Args:
+            vector_docs: 向量检索结果
+            bm25_docs: BM25检索结果
+            k: RRF参数，用于平滑排名
+
+        Returns:
+            重排后的文档列表
+        """
+        doc_scores = {}
+        doc_objects = {}
+
+        # 计算向量检索结果的RRF分数
+        for rank, doc in enumerate(vector_docs):
+            # 使用文档内容的哈希作为唯一标识
+            doc_id = hash(doc.page_content)
+            doc_objects[doc_id] = doc
+
+            # RRF公式: 1 / (k + rank)
+            rrf_score = 1.0 / (k + rank + 1)
+            doc_scores[doc_id] = doc_scores.get(doc_id, 0) + rrf_score
+
+            logger.debug(f"向量检索 - 文档{rank+1}: RRF分数 = {rrf_score:.4f}")
+
+        # 计算BM25检索结果的RRF分数
+        for rank, doc in enumerate(bm25_docs):
+            doc_id = hash(doc.page_content)
+            doc_objects[doc_id] = doc
+
+            rrf_score = 1.0 / (k + rank + 1)
+            doc_scores[doc_id] = doc_scores.get(doc_id, 0) + rrf_score
+
+            logger.debug(f"BM25检索 - 文档{rank+1}: RRF分数 = {rrf_score:.4f}")
+
+        # 按最终RRF分数排序
+        sorted_docs = sorted(doc_scores.items(), key=lambda x: x[1], reverse=True)
+
+        # 构建最终结果
+        reranked_docs = []
+        for doc_id, final_score in sorted_docs:
+            if doc_id in doc_objects:
+                doc = doc_objects[doc_id]
+                # 将RRF分数添加到文档元数据中
+                doc.metadata['rrf_score'] = final_score
+                reranked_docs.append(doc)
+                logger.debug(f"最终排序 - 文档: {doc.page_content[:50]}... 最终RRF分数: {final_score:.4f}")
+
+        logger.info(f"RRF重排完成: 向量检索{len(vector_docs)}个文档, BM25检索{len(bm25_docs)}个文档, 合并后{len(reranked_docs)}个文档")
+
+        return reranked_docs
+    def setup_retrievers(self):
+        """设置向量检索器和BM25检索器"""
+        logger.info("正在设置检索器...")
+
+        # 向量检索器
+        self.vector_retriever = self.vectorstore.as_retriever(
+            search_type="similarity",
+            search_kwargs={"k": 5}
+        )
+
+        # BM25检索器
+        self.bm25_retriever = BM25Retriever.from_documents(
+            self.chunks,
+            k=5
+        )
+        logger.info("检索器设置完成")
+    def hybrid_search(self, query: str, top_k: int = 3):
+        vector_docs = self.vectorstore.similarity_search(query, k=top_k)  # 动态传k
+        self.bm25_retriever.k = top_k  # 动态改k
+        bm25_docs = self.bm25_retriever.invoke(query)
+        # 使用RRF重排
+        reranked_docs = self._rrf_rerank(vector_docs, bm25_docs)
+        return reranked_docs[:top_k]
+
+    def filtered_hybrid_search(self, query: str, filters: dict[str, Any], top_k: int = 3):
+        docs = self.hybrid_search(query, top_k=top_k * 5)  # 多取几倍
+
+        if filters:
+            filtered = docs
+            for key, value in filters.items():
+                if key == "title":
+                    filtered = [doc for doc in filtered if str(value).lower() in str(doc.metadata.get(key, "")).lower()]
+                else:
+                    filtered = [doc for doc in filtered if doc.metadata.get(key) == value]
+            docs = filtered
+
+        return docs[:top_k]

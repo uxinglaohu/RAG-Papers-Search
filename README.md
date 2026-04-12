@@ -48,7 +48,7 @@ pip install -r requirements.txt
 
 ### 数据初始化
 
-一键从网上获取到25年的acl论文数据集
+从网上获取到25年的acl论文数据集的脚本，下载到了data/papers里面
 
 ```bash
 python download_papers.py

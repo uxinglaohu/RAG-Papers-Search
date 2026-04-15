@@ -2,7 +2,7 @@
 
 这是一个为了练习 RAG (Retrieval-Augmented Generation) 流程而编写的实验性项目。主要目的是打通从 PDF 解析、向量存储到大模型检索生成的全链路。（需要先会用docker的milvus使用，这个项目容错能力比较一般）
 
-> **项目声明**：本项目主要用于自学练习。
+> **项目声明**：大模型小白，检索功能测试感觉比较准确的，对比了claude， 有bug的话，后续我会处理..。
 
 - **Embedding 模型**: BAAI/bge-m3
 - **向量数据库**: Milvus
